@@ -1,0 +1,566 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Dodgers Performance Tracker</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+    background: #0e1117;
+    color: #e0e0e0;
+    padding: 20px;
+    max-width: 640px;
+    margin: 0 auto;
+  }
+  h1 {
+    text-align: center;
+    font-size: 2rem;
+    margin-bottom: 4px;
+    color: #005a9c;
+  }
+  .subtitle {
+    text-align: center;
+    color: #888;
+    margin-bottom: 24px;
+    font-size: 0.95rem;
+  }
+  .controls {
+    display: flex;
+    justify-content: center;
+    gap: 12px;
+    margin-bottom: 24px;
+    flex-wrap: wrap;
+  }
+  select, button {
+    background: #1a1e2a;
+    color: #e0e0e0;
+    border: 1px solid #333;
+    padding: 8px 14px;
+    border-radius: 6px;
+    font-size: 0.9rem;
+    cursor: pointer;
+  }
+  select:hover, button:hover { border-color: #005a9c; }
+  .team-chart-container {
+    background: #161b22;
+    border-radius: 12px;
+    padding: 20px;
+    margin-bottom: 32px;
+    border: 1px solid #21262d;
+  }
+  .team-chart-container h2 {
+    font-size: 1.2rem;
+    margin-bottom: 12px;
+    color: #ccc;
+  }
+  .section-title {
+    font-size: 1.4rem;
+    margin: 32px 0 16px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid #21262d;
+  }
+  .player-grid {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 16px;
+  }
+  .player-card {
+    background: #161b22;
+    border-radius: 10px;
+    padding: 16px;
+    border: 1px solid #21262d;
+  }
+  .player-card h3 {
+    font-size: 1rem;
+    margin-bottom: 8px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+  .player-card h3 span.pos {
+    font-size: 0.8rem;
+    color: #888;
+    font-weight: normal;
+  }
+  .player-card h3 span.trend-up { color: #3fb950; }
+  .player-card h3 span.trend-down { color: #f85149; }
+  .player-card h3 span.trend-flat { color: #888; }
+  canvas { width: 100% !important; }
+  .loading {
+    text-align: center;
+    padding: 60px 20px;
+    font-size: 1.1rem;
+    color: #888;
+  }
+  .loading .spinner {
+    display: inline-block;
+    width: 24px;
+    height: 24px;
+    border: 3px solid #333;
+    border-top-color: #005a9c;
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+    margin-right: 10px;
+    vertical-align: middle;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .legend-note {
+    text-align: center;
+    color: #666;
+    font-size: 0.8rem;
+    margin-top: 8px;
+  }
+</style>
+</head>
+<body>
+
+<h1>⚾ Dodgers Performance Tracker</h1>
+<p class="subtitle">Rolling OPS (batters) &amp; game score (pitchers) — higher is better</p>
+
+<div class="controls">
+  <select id="seasonSelect">
+    <option value="2026">2026 Season</option>
+    <option value="2025">2025 Season</option>
+    <option value="2024">2024 Season</option>
+  </select>
+  <select id="windowSelect">
+    <option value="5">5-Game Rolling</option>
+    <option value="10" selected>10-Game Rolling</option>
+    <option value="15">15-Game Rolling</option>
+    <option value="20">20-Game Rolling</option>
+  </select>
+  <button onclick="loadData()">Reload</button>
+</div>
+
+<div id="content">
+  <div class="loading"><span class="spinner"></span> Loading Dodgers data...</div>
+</div>
+
+<script>
+const DODGERS_ID = 119;
+const MLB_API = 'https://statsapi.mlb.com/api/v1';
+
+// Color palette for team chart lines
+const COLORS = [
+  '#005a9c','#ef4444','#22c55e','#f59e0b','#8b5cf6','#ec4899',
+  '#06b6d4','#f97316','#6366f1','#14b8a6','#e879f9','#84cc16',
+  '#fb923c','#a78bfa','#2dd4bf','#fbbf24','#f472b6','#34d399',
+  '#c084fc','#38bdf8','#a3e635','#fb7185','#818cf8','#4ade80',
+  '#facc15','#c084fc','#67e8f9','#fda4af',
+];
+
+function rollingAverage(values, window) {
+  const result = [];
+  for (let i = 0; i < values.length; i++) {
+    const start = Math.max(0, i - window + 1);
+    const slice = values.slice(start, i + 1);
+    const avg = slice.reduce((a, b) => a + b, 0) / slice.length;
+    result.push(avg);
+  }
+  return result;
+}
+
+// Batter performance: OPS-based (OBP + SLG per game, smoothed)
+// We compute a per-game "contribution score" from the box score line
+function batterGameScore(g) {
+  const ab = g.stat.atBats || 0;
+  const h = g.stat.hits || 0;
+  const doubles = g.stat.doubles || 0;
+  const triples = g.stat.triples || 0;
+  const hr = g.stat.homeRuns || 0;
+  const bb = g.stat.baseOnBalls || 0;
+  const hbp = g.stat.hitByPitch || 0;
+  const sf = g.stat.sacFlies || 0;
+  const singles = h - doubles - triples - hr;
+
+  // Total bases
+  const tb = singles + 2 * doubles + 3 * triples + 4 * hr;
+
+  // SLG component (0-4 scale, we'll normalize)
+  const slg = ab > 0 ? tb / ab : 0;
+
+  // OBP component
+  const pa = ab + bb + hbp + sf;
+  const obp = pa > 0 ? (h + bb + hbp) / pa : 0;
+
+  // Return raw OPS (typically 0.000 – 2.000 range per game)
+  return obp + slg;
+}
+
+// Pitcher performance: inverted ERA-like score
+// Lower ERA = higher score. We use a game-score-like metric.
+function pitcherGameScore(g) {
+  const ip = parseFloat(g.stat.inningsPitched) || 0;
+  const er = g.stat.earnedRuns || 0;
+  const k = g.stat.strikeOuts || 0;
+  const bb = g.stat.baseOnBalls || 0;
+  const h = g.stat.hits || 0;
+  const hr = g.stat.homeRuns || 0;
+
+  // Game Score v2 (Tom Tango)
+  const outs = Math.floor(ip) * 3 + Math.round((ip % 1) * 10);
+  let score = 40 + outs * 2 + k - bb * 2 - h * 3 - hr * 6 - er * 3;
+
+  // Normalize to 0-100ish range
+  return Math.max(0, Math.min(100, score));
+}
+
+async function fetchJSON(url) {
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return res.json();
+}
+
+async function fetchRoster(season) {
+  const data = await fetchJSON(
+    `${MLB_API}/teams/${DODGERS_ID}/roster?season=${season}&rosterType=active`
+  );
+  return data.roster || [];
+}
+
+async function fetchPlayerGameLog(playerId, season, group) {
+  try {
+    const data = await fetchJSON(
+      `${MLB_API}/people/${playerId}/stats?stats=gameLog&season=${season}&group=${group}`
+    );
+    const splits = data.stats?.[0]?.splits || [];
+    return splits;
+  } catch {
+    return [];
+  }
+}
+
+function makeChart(canvas, datasets, title, yConfig = {}) {
+  const yDefaults = { min: 0, max: 100, label: 'Performance' };
+  const y = { ...yDefaults, ...yConfig };
+  return new Chart(canvas, {
+    type: 'line',
+    data: { datasets },
+    options: {
+      responsive: true,
+      maintainAspectRatio: true,
+      animation: false,
+      interaction: { mode: 'index', intersect: false },
+      plugins: {
+        legend: { display: datasets.length > 1, labels: { color: '#999', font: { size: 10 } } },
+        title: title ? { display: true, text: title, color: '#ccc', font: { size: 14 } } : undefined,
+        tooltip: {
+          backgroundColor: '#1a1e2a',
+          titleColor: '#eee',
+          bodyColor: '#ccc',
+          borderColor: '#333',
+          borderWidth: 1,
+        },
+      },
+      scales: {
+        x: {
+          type: 'time',
+          time: { unit: 'week', tooltipFormat: 'MMM d' },
+          grid: { color: '#1e2330' },
+          ticks: { color: '#666' },
+        },
+        y: {
+          min: y.min,
+          max: y.max,
+          grid: { color: '#1e2330' },
+          ticks: { color: '#666' },
+          title: { display: true, text: y.label, color: '#666' },
+        },
+      },
+    },
+  });
+}
+
+function trendLabel(data) {
+  if (data.length < 6) return ['—', 'trend-flat'];
+  const recent = data.slice(-5);
+  const prior = data.slice(-10, -5);
+  if (prior.length === 0) return ['—', 'trend-flat'];
+  const recentAvg = recent.reduce((a, b) => a + b.y, 0) / recent.length;
+  const priorAvg = prior.reduce((a, b) => a + b.y, 0) / prior.length;
+  const diff = recentAvg - priorAvg;
+  if (diff > 0.050) return ['🔥 Hot', 'trend-up'];
+  if (diff < -0.050) return ['❄️ Cold', 'trend-down'];
+  return ['— Steady', 'trend-flat'];
+}
+
+function makePlayerBarChart(canvas, barData, type, yConfig) {
+  const y = { min: 0, max: 100, label: 'Performance', ...yConfig };
+  const avgVal = barData.reduce((s, d) => s + d.y, 0) / barData.length;
+
+  // Color bars based on relative performance
+  const colors = barData.map(d => {
+    if (type === 'batter') {
+      if (d.y >= 1.0) return '#3fb950';    // great
+      if (d.y >= 0.6) return '#005a9c';    // solid
+      if (d.y > 0) return '#005a9c88';     // meh
+      return '#21262d';                     // 0-fer
+    } else {
+      if (d.y >= 65) return '#3fb950';
+      if (d.y >= 45) return '#ef4444';
+      if (d.y >= 25) return '#ef444488';
+      return '#ef444444';
+    }
+  });
+
+  return new Chart(canvas, {
+    type: 'bar',
+    data: {
+      labels: barData.map(d => d.x),
+      datasets: [{
+        data: barData.map(d => d.y),
+        backgroundColor: colors,
+        borderRadius: 2,
+        barPercentage: 0.85,
+        categoryPercentage: 0.9,
+        _raw: barData, // stash for tooltip
+      }],
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: true,
+      animation: false,
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          backgroundColor: '#1a1e2a',
+          titleColor: '#eee',
+          bodyColor: '#ccc',
+          borderColor: '#333',
+          borderWidth: 1,
+          bodyFont: { family: 'monospace', size: 12 },
+          callbacks: {
+            title(items) {
+              const idx = items[0].dataIndex;
+              const d = barData[idx];
+              const dateStr = new Date(d.x + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+              return `${dateStr} vs ${d.opponent}`;
+            },
+            label(item) {
+              const d = barData[item.dataIndex];
+              const s = d.stat;
+              if (type === 'batter') {
+                const lines = [];
+                lines.push(`${s.hits || 0}-${s.atBats || 0}, ${s.runs || 0} R, ${s.rbi || 0} RBI`);
+                const extras = [];
+                if (s.doubles) extras.push(`${s.doubles} 2B`);
+                if (s.triples) extras.push(`${s.triples} 3B`);
+                if (s.homeRuns) extras.push(`${s.homeRuns} HR`);
+                if (s.baseOnBalls) extras.push(`${s.baseOnBalls} BB`);
+                if (s.strikeOuts) extras.push(`${s.strikeOuts} K`);
+                if (s.stolenBases) extras.push(`${s.stolenBases} SB`);
+                if (extras.length) lines.push(extras.join(', '));
+                lines.push(`OPS: ${d.y.toFixed(3)}`);
+                return lines;
+              } else {
+                const lines = [];
+                lines.push(`${s.inningsPitched || 0} IP, ${s.earnedRuns || 0} ER`);
+                const extras = [];
+                if (s.strikeOuts) extras.push(`${s.strikeOuts} K`);
+                if (s.baseOnBalls) extras.push(`${s.baseOnBalls} BB`);
+                if (s.hits) extras.push(`${s.hits} H`);
+                if (s.homeRuns) extras.push(`${s.homeRuns} HR`);
+                if (extras.length) lines.push(extras.join(', '));
+                const dec = s.wins ? 'W' : s.losses ? 'L' : s.saves ? 'SV' : s.holds ? 'HLD' : '';
+                if (dec) lines.push(`Decision: ${dec}`);
+                lines.push(`Game Score: ${d.y}`);
+                return lines;
+              }
+            },
+          },
+        },
+      },
+      scales: {
+        x: {
+          type: 'time',
+          time: { unit: 'week', tooltipFormat: 'MMM d' },
+          grid: { display: false },
+          ticks: { color: '#666', font: { size: 9 } },
+        },
+        y: {
+          min: y.min,
+          max: y.max,
+          grid: { color: '#1e2330' },
+          ticks: { color: '#666' },
+          title: { display: true, text: y.label, color: '#666' },
+        },
+      },
+    },
+  });
+}
+
+async function loadData() {
+  const season = document.getElementById('seasonSelect').value;
+  const window = parseInt(document.getElementById('windowSelect').value);
+  const content = document.getElementById('content');
+  content.innerHTML = '<div class="loading"><span class="spinner"></span> Loading Dodgers data...</div>';
+
+  try {
+    const roster = await fetchRoster(season);
+
+    // TWP players go in both groups
+    const batters = roster.filter(p =>
+      p.position.abbreviation !== 'P'
+    );
+    const pitchers = roster.filter(p =>
+      p.position.abbreviation === 'P' || p.position.abbreviation === 'TWP'
+    );
+
+    // Fetch all game logs in parallel
+    const batterLogs = await Promise.all(
+      batters.map(async (p) => {
+        const logs = await fetchPlayerGameLog(p.person.id, season, 'hitting');
+        return { player: p, logs };
+      })
+    );
+    const pitcherLogs = await Promise.all(
+      pitchers.map(async (p) => {
+        const logs = await fetchPlayerGameLog(p.person.id, season, 'pitching');
+        return { player: p, logs };
+      })
+    );
+
+    // Process batter data
+    const batterData = batterLogs
+      .filter(b => b.logs.length >= 5)
+      .map(b => {
+        const scores = b.logs.map(g => batterGameScore(g));
+        const dates = b.logs.map(g => g.date);
+        const rolling = rollingAverage(scores, window);
+        const rollingData = dates.map((d, i) => ({ x: d, y: Math.round(rolling[i] * 1000) / 1000 }));
+        const barData = b.logs.map((g, i) => ({
+          x: g.date,
+          y: Math.round(scores[i] * 1000) / 1000,
+          stat: g.stat,
+          opponent: g.opponent?.name || '?',
+        }));
+        return {
+          name: b.player.person.fullName,
+          position: b.player.position.abbreviation,
+          games: b.logs.length,
+          rollingData,
+          barData,
+        };
+      })
+      .sort((a, b) => b.games - a.games);
+
+    // Process pitcher data
+    const pitcherData = pitcherLogs
+      .filter(p => p.logs.length >= 3)
+      .map(p => {
+        const scores = p.logs.map(g => pitcherGameScore(g));
+        const dates = p.logs.map(g => g.date);
+        const rolling = rollingAverage(scores, Math.max(3, Math.floor(window / 2)));
+        const rollingData = dates.map((d, i) => ({ x: d, y: Math.round(rolling[i] * 10) / 10 }));
+        const barData = p.logs.map((g, i) => ({
+          x: g.date,
+          y: Math.round(scores[i] * 10) / 10,
+          stat: g.stat,
+          opponent: g.opponent?.name || '?',
+        }));
+        return {
+          name: p.player.person.fullName,
+          position: 'P',
+          games: p.logs.length,
+          rollingData,
+          barData,
+        };
+      })
+      .sort((a, b) => b.games - a.games);
+
+    // Build the page
+    let html = '';
+
+    // Team overview chart - batters
+    html += `<div class="team-chart-container">
+      <h2>Team Batting Performance</h2>
+      <canvas id="teamBatChart" height="200"></canvas>
+      <p class="legend-note">Rolling OPS (On-base + Slugging)</p>
+    </div>`;
+
+    // Team overview chart - pitchers
+    html += `<div class="team-chart-container">
+      <h2>Team Pitching Performance</h2>
+      <canvas id="teamPitchChart" height="200"></canvas>
+      <p class="legend-note">Modified game score (K, IP, ER, H, BB weighted — higher is better)</p>
+    </div>`;
+
+    // Individual batter cards
+    html += `<h2 class="section-title">🏏 Position Players</h2><div class="player-grid">`;
+    batterData.forEach((b, i) => {
+      const [trend, cls] = trendLabel(b.rollingData);
+      html += `<div class="player-card">
+        <h3>${b.name} <span class="pos">${b.position} · ${b.games}G</span> <span class="${cls}">${trend}</span></h3>
+        <canvas id="bat${i}" height="150"></canvas>
+      </div>`;
+    });
+    html += `</div>`;
+
+    // Individual pitcher cards
+    html += `<h2 class="section-title">⚾ Pitchers</h2><div class="player-grid">`;
+    pitcherData.forEach((p, i) => {
+      const [trend, cls] = trendLabel(p.rollingData);
+      html += `<div class="player-card">
+        <h3>${p.name} <span class="pos">P · ${p.games}G</span> <span class="${cls}">${trend}</span></h3>
+        <canvas id="pitch${i}" height="150"></canvas>
+      </div>`;
+    });
+    html += `</div>`;
+
+    content.innerHTML = html;
+
+    // Render team batting chart
+    const teamBatDatasets = batterData.map((b, i) => ({
+      label: b.name,
+      data: b.rollingData,
+      borderColor: COLORS[i % COLORS.length],
+      backgroundColor: COLORS[i % COLORS.length] + '15',
+      borderWidth: 1.5,
+      pointRadius: 0,
+      tension: 0.3,
+      fill: false,
+    }));
+    const opsY = { min: 0, max: 1.5, label: 'OPS' };
+    const gsY = { min: 0, max: 100, label: 'Game Score' };
+    makeChart(document.getElementById('teamBatChart'), teamBatDatasets, null, opsY);
+
+    // Render team pitching chart
+    const teamPitchDatasets = pitcherData.map((p, i) => ({
+      label: p.name,
+      data: p.rollingData,
+      borderColor: COLORS[i % COLORS.length],
+      backgroundColor: COLORS[i % COLORS.length] + '15',
+      borderWidth: 1.5,
+      pointRadius: 0,
+      tension: 0.3,
+      fill: false,
+    }));
+    makeChart(document.getElementById('teamPitchChart'), teamPitchDatasets, null, gsY);
+
+    // Render individual batter bar charts
+    batterData.forEach((b, i) => {
+      const canvas = document.getElementById(`bat${i}`);
+      makePlayerBarChart(canvas, b.barData, 'batter', opsY);
+    });
+
+    // Render individual pitcher bar charts
+    pitcherData.forEach((p, i) => {
+      const canvas = document.getElementById(`pitch${i}`);
+      makePlayerBarChart(canvas, p.barData, 'pitcher', gsY);
+    });
+
+  } catch (err) {
+    content.innerHTML = `<div class="loading" style="color: #f85149;">Error: ${err.message}. Try a different season.</div>`;
+    console.error(err);
+  }
+}
+
+// Load on startup
+loadData();
+</script>
+</body>
+</html>

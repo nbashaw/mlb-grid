@@ -1,0 +1,577 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>MLB Game Grid</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+    background: #0e1117;
+    color: #e0e0e0;
+    display: flex;
+  }
+  .sidebar {
+    width: 200px;
+    min-width: 200px;
+    height: 100vh;
+    overflow-y: auto;
+    background: #161b22;
+    border-right: 1px solid #21262d;
+    padding: 12px 0;
+    position: sticky;
+    top: 0;
+  }
+  .sidebar h2 {
+    font-size: 0.75rem;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: #666;
+    padding: 8px 14px 4px;
+    margin-top: 8px;
+  }
+  .sidebar h2:first-child { margin-top: 0; }
+  .sidebar button {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    text-align: left;
+    background: none;
+    border: none;
+    color: #ccc;
+    padding: 6px 14px;
+    font-size: 0.85rem;
+    cursor: pointer;
+    transition: background 0.1s;
+  }
+  .sidebar button img {
+    width: 20px;
+    height: 20px;
+    object-fit: contain;
+  }
+  .sidebar button:hover { background: #21262d; }
+  .sidebar button.active { background: #005a9c33; color: #58a6ff; font-weight: 600; }
+  .main {
+    flex: 1;
+    padding: 20px;
+    overflow-x: auto;
+  }
+  h1 { font-size: 1.4rem; margin-bottom: 4px; color: #ccc; display: flex; align-items: center; gap: 10px; }
+  h1 img { width: 32px; height: 32px; object-fit: contain; }
+  .subtitle { color: #666; font-size: 0.85rem; margin-bottom: 16px; }
+  .grid-wrapper {
+    overflow-x: auto;
+    position: relative;
+  }
+  table {
+    border-collapse: separate;
+    border-spacing: 0 6px;
+    white-space: nowrap;
+  }
+  th {
+    position: sticky;
+    left: 0;
+    z-index: 2;
+    background: #0e1117;
+    text-align: right;
+    padding: 0 10px 0 0;
+    font-size: 0.8rem;
+    font-weight: 500;
+    color: #ccc;
+    border-right: 1px solid #21262d;
+    min-width: 130px;
+  }
+  th .pos { color: #666; font-weight: normal; font-size: 0.7rem; margin-left: 4px; }
+  td {
+    width: 20px;
+    min-width: 20px;
+    max-width: 20px;
+    height: 100px;
+    padding: 0;
+    position: relative;
+    cursor: pointer;
+  }
+  td .bar {
+    position: absolute;
+    bottom: 0;
+    left: 1px;
+    right: 1px;
+    border-radius: 2px 2px 0 0;
+    transition: opacity 0.1s;
+  }
+  td:hover .bar { opacity: 0.8; }
+  tr { position: relative; }
+  .rolling-svg {
+    position: absolute;
+    top: 0;
+    left: 0;
+    pointer-events: none;
+    z-index: 1;
+  }
+  .date-row th { border-right: 1px solid #21262d; }
+  .date-row td {
+    height: 20px;
+    text-align: center;
+    font-size: 0.55rem;
+    color: #555;
+    vertical-align: middle;
+    border-top: 1px solid #21262d;
+  }
+  .tooltip {
+    display: none;
+    position: fixed;
+    z-index: 100;
+    background: #1a1e2a;
+    border: 1px solid #333;
+    border-radius: 6px;
+    padding: 8px 10px;
+    font-size: 0.8rem;
+    line-height: 1.5;
+    pointer-events: none;
+    max-width: 240px;
+    color: #ccc;
+  }
+  .tooltip .tt-title { color: #eee; font-weight: 600; margin-bottom: 2px; }
+  .tooltip .tt-sub { color: #888; font-size: 0.75rem; }
+  .tooltip .tt-stat { font-family: monospace; }
+  .legend {
+    display: flex;
+    gap: 12px;
+    margin-bottom: 16px;
+    align-items: center;
+    font-size: 0.8rem;
+    color: #888;
+    flex-wrap: wrap;
+  }
+  .legend-swatch {
+    display: inline-block;
+    width: 14px;
+    height: 14px;
+    border-radius: 2px;
+    vertical-align: middle;
+    margin-right: 4px;
+  }
+  .loading {
+    text-align: center;
+    padding: 80px 20px;
+    color: #888;
+  }
+  .loading .spinner {
+    display: inline-block;
+    width: 24px;
+    height: 24px;
+    border: 3px solid #333;
+    border-top-color: #005a9c;
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+    margin-right: 10px;
+    vertical-align: middle;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .section-label {
+    font-size: 0.9rem;
+    color: #888;
+    margin: 24px 0 8px;
+    padding-bottom: 4px;
+    border-bottom: 1px solid #21262d;
+  }
+</style>
+</head>
+<body>
+
+<div class="sidebar" id="sidebar"></div>
+
+<div class="main">
+  <h1><img src="https://www.mlbstatic.com/team-logos/119.svg" id="titleLogo" alt=""> <span id="titleText">Dodgers Game Grid — 2026</span></h1>
+  <p class="subtitle">Each column is a game. Each row is a player. Taller bar = better performance.</p>
+
+  <div class="legend">
+    <span><span class="legend-swatch" style="background:#3fb950"></span> OPS 1.000+</span>
+    <span><span class="legend-swatch" style="background:#238636"></span> .750–1.000</span>
+    <span><span class="legend-swatch" style="background:#005a9c"></span> .500–.750</span>
+    <span><span class="legend-swatch" style="background:#005a9c88"></span> .250–.500</span>
+    <span><span class="legend-swatch" style="background:#21262d"></span> 0-fer</span>
+    <span><span class="legend-swatch" style="background:#888"></span> DNP</span>
+    <span><span class="legend-swatch" style="background:#fbbf24;height:3px;vertical-align:middle;"></span> 7-game rolling avg</span>
+  </div>
+
+  <div id="content">
+    <div class="loading"><span class="spinner"></span> Loading...</div>
+  </div>
+</div>
+
+<div class="tooltip" id="tooltip"></div>
+
+<script>
+const MLB_API = 'https://statsapi.mlb.com/api/v1';
+const SEASON = 2026;
+let currentTeamId = 119;
+
+const TEAMS = {
+  'AL East': [
+    { id: 110, name: 'Orioles' },
+    { id: 111, name: 'Red Sox' },
+    { id: 147, name: 'Yankees' },
+    { id: 139, name: 'Rays' },
+    { id: 141, name: 'Blue Jays' },
+  ],
+  'AL Central': [
+    { id: 114, name: 'Guardians' },
+    { id: 116, name: 'Tigers' },
+    { id: 118, name: 'Royals' },
+    { id: 142, name: 'Twins' },
+    { id: 145, name: 'White Sox' },
+  ],
+  'AL West': [
+    { id: 117, name: 'Astros' },
+    { id: 133, name: 'Athletics' },
+    { id: 108, name: 'Angels' },
+    { id: 136, name: 'Mariners' },
+    { id: 140, name: 'Rangers' },
+  ],
+  'NL East': [
+    { id: 144, name: 'Braves' },
+    { id: 146, name: 'Marlins' },
+    { id: 121, name: 'Mets' },
+    { id: 143, name: 'Phillies' },
+    { id: 120, name: 'Nationals' },
+  ],
+  'NL Central': [
+    { id: 112, name: 'Cubs' },
+    { id: 113, name: 'Reds' },
+    { id: 158, name: 'Brewers' },
+    { id: 134, name: 'Pirates' },
+    { id: 138, name: 'Cardinals' },
+  ],
+  'NL West': [
+    { id: 109, name: 'D-backs' },
+    { id: 115, name: 'Rockies' },
+    { id: 119, name: 'Dodgers' },
+    { id: 135, name: 'Padres' },
+    { id: 137, name: 'Giants' },
+  ],
+};
+
+// Build sidebar
+function buildSidebar() {
+  const sidebar = document.getElementById('sidebar');
+  let html = '';
+  for (const [div, teams] of Object.entries(TEAMS)) {
+    html += `<h2>${div}</h2>`;
+    for (const t of teams) {
+      const active = t.id === currentTeamId ? ' class="active"' : '';
+      const logo = `https://www.mlbstatic.com/team-logos/${t.id}.svg`;
+      html += `<button${active} data-id="${t.id}" data-name="${t.name}"><img src="${logo}" alt="">${t.name}</button>`;
+    }
+  }
+  sidebar.innerHTML = html;
+  sidebar.querySelectorAll('button').forEach(btn => {
+    btn.addEventListener('click', () => {
+      currentTeamId = parseInt(btn.dataset.id);
+      document.getElementById('titleLogo').src = `https://www.mlbstatic.com/team-logos/${btn.dataset.id}.svg`;
+      document.getElementById('titleText').textContent = `${btn.dataset.name} Game Grid — ${SEASON}`;
+      sidebar.querySelectorAll('button').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      load();
+    });
+  });
+}
+buildSidebar();
+
+async function fetchJSON(url) {
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return res.json();
+}
+
+function calcOPS(s) {
+  const ab = s.atBats || 0;
+  const h = s.hits || 0;
+  const doubles = s.doubles || 0;
+  const triples = s.triples || 0;
+  const hr = s.homeRuns || 0;
+  const bb = s.baseOnBalls || 0;
+  const hbp = s.hitByPitch || 0;
+  const sf = s.sacFlies || 0;
+  const tb = (h - doubles - triples - hr) + 2*doubles + 3*triples + 4*hr;
+  const slg = ab > 0 ? tb / ab : 0;
+  const pa = ab + bb + hbp + sf;
+  const obp = pa > 0 ? (h + bb + hbp) / pa : 0;
+  return obp + slg;
+}
+
+function calcGameScore(s) {
+  const ip = parseFloat(s.inningsPitched) || 0;
+  const outs = Math.floor(ip) * 3 + Math.round((ip % 1) * 10);
+  let score = 40 + outs*2 + (s.strikeOuts||0) - (s.baseOnBalls||0)*2 - (s.hits||0)*3 - (s.homeRuns||0)*6 - (s.earnedRuns||0)*3;
+  return Math.max(0, Math.min(100, score));
+}
+
+function opsColor(ops) {
+  if (ops >= 1.0) return '#3fb950';
+  if (ops >= 0.75) return '#238636';
+  if (ops >= 0.5) return '#005a9c';
+  if (ops > 0) return '#005a9c88';
+  return '#21262d';
+}
+
+function gsColor(gs) {
+  if (gs >= 65) return '#3fb950';
+  if (gs >= 50) return '#238636';
+  if (gs >= 35) return '#ef4444';
+  if (gs > 0) return '#ef444488';
+  return '#21262d';
+}
+
+function formatDate(d) {
+  return new Date(d + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+}
+
+async function load() {
+  const content = document.getElementById('content');
+
+  try {
+    // Get schedule to know all game dates
+    const schedData = await fetchJSON(
+      `${MLB_API}/schedule?teamId=${currentTeamId}&season=${SEASON}&sportId=1&gameType=R`
+    );
+    const gameDates = [];
+    const gameDateSet = new Set();
+    for (const d of (schedData.dates || [])) {
+      if (!gameDateSet.has(d.date)) {
+        gameDateSet.add(d.date);
+        const g = d.games[0];
+        const opp = g.teams.away.team.id === currentTeamId
+          ? g.teams.home.team.name
+          : g.teams.away.team.name;
+        gameDates.push({ date: d.date, opponent: opp });
+      }
+    }
+    // Only past games
+    const today = new Date().toISOString().slice(0, 10);
+    const pastDates = gameDates.filter(g => g.date <= today);
+
+    // Get roster
+    const rosterData = await fetchJSON(
+      `${MLB_API}/teams/${currentTeamId}/roster?season=${SEASON}&rosterType=active`
+    );
+    const roster = rosterData.roster || [];
+    const batters = roster.filter(p => p.position.abbreviation !== 'P' && p.position.abbreviation !== 'TWP');
+    const pitchers = roster.filter(p => p.position.abbreviation === 'P' || p.position.abbreviation === 'TWP');
+
+    // Fetch all game logs — TWP players get both hitting and pitching
+    async function fetchLogs(playerId, group) {
+      try {
+        const data = await fetchJSON(
+          `${MLB_API}/people/${playerId}/stats?stats=gameLog&season=${SEASON}&group=${group}`
+        );
+        const splits = data.stats?.[0]?.splits || [];
+        const byDate = {};
+        for (const s of splits) { byDate[s.date] = s; }
+        return { byDate, games: splits.length };
+      } catch {
+        return { byDate: {}, games: 0 };
+      }
+    }
+
+    const batterPlayers = [];
+    const pitcherPlayers = [];
+
+    await Promise.all(
+      roster.map(async (p) => {
+        const pos = p.position.abbreviation;
+        const isTwoWay = pos === 'TWP';
+        const isPitcher = pos === 'P';
+
+        if (!isPitcher) {
+          // All non-pitchers (including TWP) get hitting logs
+          const hit = await fetchLogs(p.person.id, 'hitting');
+          if (hit.games >= 3) {
+            batterPlayers.push({ player: p, isPitcher: false, byDate: hit.byDate, games: hit.games });
+          }
+        }
+
+        if (isPitcher || isTwoWay) {
+          // All pitchers (including TWP) get pitching logs
+          const pitch = await fetchLogs(p.person.id, 'pitching');
+          if (pitch.games >= 2) {
+            pitcherPlayers.push({ player: p, isPitcher: true, byDate: pitch.byDate, games: pitch.games });
+          }
+        }
+      })
+    );
+
+    batterPlayers.sort((a, b) => b.games - a.games);
+    pitcherPlayers.sort((a, b) => b.games - a.games);
+
+    function buildGrid(players, dates, type) {
+      let html = '<div class="grid-wrapper"><table>';
+
+      // Date header row
+      html += '<tr class="date-row"><th></th>';
+      for (const g of dates) {
+        const d = new Date(g.date + 'T12:00:00');
+        const day = d.getDate();
+        const isFirst = day <= 3 || dates.indexOf(g) === 0;
+        const label = isFirst
+          ? d.toLocaleDateString('en-US', { month: 'short' }).replace('.','') + ' ' + day
+          : day;
+        html += `<td>${label}</td>`;
+      }
+      html += '</tr>';
+
+      // Player rows
+      const ROLLING_WINDOW = 7;
+      const gridMeta = []; // collect per-player data for SVG overlay
+
+      for (const p of players) {
+        const playerCells = []; // { colIdx, val, pct }
+        html += `<tr class="player-row"><th>${p.player.person.fullName} <span class="pos">${p.player.position.abbreviation}</span></th>`;
+        for (let ci = 0; ci < dates.length; ci++) {
+          const g = dates[ci];
+          const split = p.byDate[g.date];
+          if (!split) {
+            playerCells.push(null);
+            html += `<td><div class="bar" style="height:2px;background:#1a1e2a;"></div></td>`;
+            continue;
+          }
+          const s = split.stat;
+          let val, pct, color, tooltipLines;
+          if (type === 'batter') {
+            val = calcOPS(s);
+            pct = Math.min(100, (val / 2.5) * 100);
+            color = opsColor(val);
+            const extras = [];
+            if (s.doubles) extras.push(`${s.doubles} 2B`);
+            if (s.triples) extras.push(`${s.triples} 3B`);
+            if (s.homeRuns) extras.push(`${s.homeRuns} HR`);
+            if (s.baseOnBalls) extras.push(`${s.baseOnBalls} BB`);
+            if (s.strikeOuts) extras.push(`${s.strikeOuts} K`);
+            if (s.stolenBases) extras.push(`${s.stolenBases} SB`);
+            tooltipLines = [
+              `<div class="tt-title">${p.player.person.fullName}</div>`,
+              `<div class="tt-sub">${formatDate(g.date)} vs ${g.opponent}</div>`,
+              `<div class="tt-stat">${s.hits||0}-${s.atBats||0}, ${s.runs||0} R, ${s.rbi||0} RBI</div>`,
+              extras.length ? `<div class="tt-stat">${extras.join(', ')}</div>` : '',
+              `<div style="margin-top:2px;color:#eee;">OPS: ${val.toFixed(3)}</div>`,
+            ];
+          } else {
+            val = calcGameScore(s);
+            pct = Math.min(100, val);
+            color = gsColor(val);
+            const extras = [];
+            if (s.strikeOuts) extras.push(`${s.strikeOuts} K`);
+            if (s.baseOnBalls) extras.push(`${s.baseOnBalls} BB`);
+            if (s.hits) extras.push(`${s.hits} H`);
+            if (s.homeRuns) extras.push(`${s.homeRuns} HR`);
+            const dec = s.wins ? 'W' : s.losses ? 'L' : s.saves ? 'SV' : s.holds ? 'HLD' : '';
+            tooltipLines = [
+              `<div class="tt-title">${p.player.person.fullName}</div>`,
+              `<div class="tt-sub">${formatDate(g.date)} vs ${g.opponent}</div>`,
+              `<div class="tt-stat">${s.inningsPitched||0} IP, ${s.earnedRuns||0} ER</div>`,
+              extras.length ? `<div class="tt-stat">${extras.join(', ')}</div>` : '',
+              dec ? `<div class="tt-stat">Decision: ${dec}</div>` : '',
+              `<div style="margin-top:2px;color:#eee;">Game Score: ${Math.round(val)}</div>`,
+            ];
+          }
+          playerCells.push({ colIdx: ci, pct });
+          const ttHtml = tooltipLines.filter(Boolean).join('');
+          html += `<td data-tt="${ttHtml.replace(/"/g, '&quot;')}"><div class="bar" style="height:${Math.max(2, pct)}%;background:${color};"></div></td>`;
+        }
+        html += '</tr>';
+
+        // Compute rolling avg for this player (only over games played)
+        const played = playerCells.filter(c => c !== null);
+        const rollingPcts = [];
+        for (let i = 0; i < played.length; i++) {
+          const start = Math.max(0, i - ROLLING_WINDOW + 1);
+          const slice = played.slice(start, i + 1);
+          const avg = slice.reduce((s, c) => s + c.pct, 0) / slice.length;
+          rollingPcts.push({ colIdx: played[i].colIdx, pct: avg });
+        }
+        gridMeta.push(rollingPcts);
+      }
+      html += '</table></div>';
+      return { html, gridMeta };
+    }
+
+    let html = '';
+    const batGrid = buildGrid(batterPlayers, pastDates, 'batter');
+    const pitchGrid = buildGrid(pitcherPlayers, pastDates, 'pitcher');
+    html += '<div class="section-label">Position Players</div>';
+    html += batGrid.html;
+    html += '<div class="section-label">Pitchers</div>';
+    html += pitchGrid.html;
+
+    content.innerHTML = html;
+
+    // Draw rolling average SVG lines on each player row
+    function drawRollingLines(gridMeta) {
+      const playerRows = content.querySelectorAll('tr.player-row');
+      playerRows.forEach((tr, rowIdx) => {
+        if (rowIdx >= gridMeta.length) return;
+        const rolling = gridMeta[rowIdx];
+        if (rolling.length < 2) return;
+
+        const tds = tr.querySelectorAll('td');
+        if (!tds.length) return;
+        const rowHeight = tr.offsetHeight;
+        const cellWidth = tds[0].offsetWidth;
+        const thWidth = tr.querySelector('th').offsetWidth;
+
+        // Build SVG polyline points
+        const points = rolling.map(r => {
+          const x = thWidth + r.colIdx * cellWidth + cellWidth / 2;
+          const y = rowHeight - (r.pct / 100) * rowHeight;
+          return `${x},${y}`;
+        }).join(' ');
+
+        const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+        svg.classList.add('rolling-svg');
+        svg.setAttribute('width', tr.scrollWidth);
+        svg.setAttribute('height', rowHeight);
+        svg.innerHTML = `<polyline points="${points}" fill="none" stroke="#fbbf24" stroke-width="2" stroke-opacity="0.8" stroke-linejoin="round"/>`;
+        tr.appendChild(svg);
+      });
+    }
+
+    // Small delay to let layout settle, then draw lines
+    requestAnimationFrame(() => {
+      const allRows = content.querySelectorAll('tr.player-row');
+      // Split gridMeta back into batter + pitcher sets
+      const allMeta = [...batGrid.gridMeta, ...pitchGrid.gridMeta];
+      drawRollingLines(allMeta);
+    });
+
+    // Tooltip behavior
+    const tooltip = document.getElementById('tooltip');
+    document.addEventListener('mouseover', (e) => {
+      const td = e.target.closest('td[data-tt]');
+      if (td) {
+        tooltip.innerHTML = td.getAttribute('data-tt');
+        tooltip.style.display = 'block';
+      }
+    });
+    document.addEventListener('mousemove', (e) => {
+      if (tooltip.style.display === 'block') {
+        tooltip.style.left = (e.clientX + 12) + 'px';
+        tooltip.style.top = (e.clientY - 10) + 'px';
+      }
+    });
+    document.addEventListener('mouseout', (e) => {
+      const td = e.target.closest('td[data-tt]');
+      if (td) tooltip.style.display = 'none';
+    });
+
+  } catch (err) {
+    content.innerHTML = `<div class="loading" style="color:#f85149;">Error: ${err.message}</div>`;
+    console.error(err);
+  }
+}
+
+load();
+</script>
+</body>
+</html>
